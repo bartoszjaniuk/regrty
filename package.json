@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon src/server.ts"
+    "start": "nodemon src/server.ts",
+    "create:migration": "npx mikro-orm migration:create",
+    "create:up": "npx mikro-orm migration:up"
   },
   "author": "",
   "license": "ISC",
@@ -21,6 +23,7 @@
     "@mikro-orm/migrations": "5.0.0",
     "@mikro-orm/postgresql": "5.0.0",
     "apollo-server-express": "^3.6.3",
+    "argon2": "^0.28.5",
     "express": "^4.17.3",
     "graphql": "15.3.0",
     "pg": "^8.7.3",
