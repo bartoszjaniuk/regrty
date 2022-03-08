@@ -1,5 +1,5 @@
 import { MyContext } from 'src/types';
-import { Arg, Ctx, Field, InputType, Mutation, ObjectType, Resolver } from 'type-graphql';
+import { Arg, Ctx, Field, InputType, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import { User } from '../entities/User';
 import argon2 from 'argon2';
 
@@ -37,10 +37,16 @@ const createError = (field: string, message: string) => {
 
 @Resolver()
 export class UserResolver {
+  @Query(() => User, { nullable: true })
+  async me(@Ctx() { req, em }: MyContext) {
+    if (!req.session.userId) return null;
+    const user = await em.findOne(User, { _id: req.session.userId });
+    return user;
+  }
   @Mutation(() => User)
   async register(
     @Arg('userCredentials') userCredentials: UserCredentials,
-    @Ctx() { em }: MyContext
+    @Ctx() { em, req }: MyContext
   ) {
     const hashedPassword = await argon2.hash(userCredentials.password);
 
@@ -59,13 +65,14 @@ export class UserResolver {
         return createError('username', 'username already taken');
       }
     }
+    req.session.userId = user._id;
     return user;
   }
 
   @Mutation(() => UserResponse)
   async login(
     @Arg('userCredentials') userCredentials: UserCredentials,
-    @Ctx() { em }: MyContext
+    @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
     const { username, password } = userCredentials;
     const user = await em.findOne(User, { username });
@@ -76,6 +83,7 @@ export class UserResolver {
     if (!validatePassword) {
       createError('username', 'Invalid login or password');
     }
+    req.session.userId = user._id;
     return {
       user,
     };
