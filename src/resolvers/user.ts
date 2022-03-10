@@ -1,16 +1,12 @@
+import { COOKIE_NAME } from './../constants';
 import { MyContext } from 'src/types';
-import { Arg, Ctx, Field, InputType, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
-import { User } from '../entities/User';
+import { Arg, Ctx, Field, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import argon2 from 'argon2';
-
-@InputType() // as arguments
-class UserCredentials {
-  @Field()
-  username: string;
-
-  @Field()
-  password: string;
-}
+import { EntityManager } from '@mikro-orm/postgresql';
+import { createError } from '../utils/createValidationError';
+import { UserCredentials } from '../models/userCredentials';
+import { validateRegister } from '../utils/validateRegister';
+import { User } from '../entities/User';
 
 @ObjectType()
 class FieldError {
@@ -29,12 +25,6 @@ class UserResponse {
   user?: User;
 }
 
-const createError = (field: string, message: string) => {
-  return {
-    errors: [{ field, message }],
-  };
-};
-
 @Resolver()
 export class UserResolver {
   @Query(() => User, { nullable: true })
@@ -43,50 +33,91 @@ export class UserResolver {
     const user = await em.findOne(User, { _id: req.session.userId });
     return user;
   }
-  @Mutation(() => User)
+
+  // @Mutation(() => Boolean)
+  // async forgotPassword(@Arg('email') email: string, @Ctx() { em }: MyContext) {
+  //   // const user = await em.findOne(User, { email });
+  // }
+
+  @Mutation(() => UserResponse)
   async register(
     @Arg('userCredentials') userCredentials: UserCredentials,
     @Ctx() { em, req }: MyContext
   ) {
     const hashedPassword = await argon2.hash(userCredentials.password);
 
-    if (userCredentials.username.length < 4) {
-      return createError('username', 'username must contain at leat 4 characters');
-    }
-    const user = em.create(User, {
-      username: userCredentials.username,
-      password: hashedPassword,
-      createdAt: new Date(),
-    });
+    // const user = em.create(User, {
+    //   username: userCredentials.username,
+    //   password: hashedPassword,
+    //   createdAt: new Date(),
+    // });
+
+    const areErrors = validateRegister(userCredentials);
+
+    if (areErrors) return areErrors;
+
+    let user;
     try {
-      await em.persistAndFlush(user);
+      const result = await (em as EntityManager)
+        .createQueryBuilder(User)
+        .getKnexQuery()
+        .insert({
+          username: userCredentials.username,
+          password: hashedPassword,
+          created_at: new Date(),
+          updated_at: new Date(),
+          email: userCredentials.email,
+        })
+        .returning('*');
+      // await em.persistAndFlush(user);
+      user = result[0];
     } catch (error) {
-      if (error.code === '23505' || error.detail.includes('already exists')) {
+      if (error.detail.includes('already exists')) {
         return createError('username', 'username already taken');
       }
-    }
-    req.session.userId = user._id;
-    return user;
-  }
-
-  @Mutation(() => UserResponse)
-  async login(
-    @Arg('userCredentials') userCredentials: UserCredentials,
-    @Ctx() { em, req }: MyContext
-  ): Promise<UserResponse> {
-    const { username, password } = userCredentials;
-    const user = await em.findOne(User, { username });
-    if (!user) {
-      return createError('username', "User with that login doesn't exist");
-    }
-    const validatePassword = await argon2.verify(user.password, password);
-    if (!validatePassword) {
-      createError('username', 'Invalid login or password');
     }
     req.session.userId = user._id;
     return {
       user,
     };
+  }
+
+  @Mutation(() => UserResponse)
+  async login(
+    @Arg('usernameOrEmail') usernameOrEmail: string,
+    @Arg('password') password: string,
+
+    @Ctx() { em, req }: MyContext
+  ): Promise<UserResponse> {
+    const user = await em.findOne(
+      User,
+      usernameOrEmail.includes('@') ? { email: usernameOrEmail } : { username: usernameOrEmail }
+    );
+    if (!user) {
+      return createError('usernameOrEmail', "User with that login or email doesn't exist");
+    }
+    const isValid = await argon2.verify(user.password, password);
+    if (!isValid) {
+      return createError('password', 'Invalid login or password');
+    }
+    req.session.userId = user._id;
+    return {
+      user,
+    };
+  }
+
+  @Mutation(() => Boolean)
+  logout(@Ctx() { req, res }: MyContext) {
+    return new Promise(resolve =>
+      req.session.destroy(err => {
+        res.clearCookie(COOKIE_NAME);
+        if (err) {
+          console.log('Logout error 💣', err);
+          resolve(false);
+        }
+        return resolve(true);
+      })
+    );
   }
 }
 
