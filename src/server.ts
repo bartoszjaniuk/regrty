@@ -11,6 +11,7 @@ import session from 'express-session';
 import connectRedis from 'connect-redis';
 import cors from 'cors';
 import { UserResolver } from './resolvers/user';
+import Redis from 'ioredis';
 
 const main = async () => {
   try {
@@ -38,16 +39,12 @@ const main = async () => {
     );
 
     const RedisStore = connectRedis(session);
-
-    const { createClient } = require('redis');
-
-    const redisClient = createClient({ legacyMode: true });
-    redisClient.connect().catch(console.error);
+    const redis = new Redis();
 
     app.use(
       session({
         name: COOKIE_NAME,
-        store: new RedisStore({ client: redisClient, disableTouch: true }),
+        store: new RedisStore({ client: redis, disableTouch: true }),
         saveUninitialized: false,
         secret: 'donkey from shrek',
         resave: false,
@@ -66,7 +63,7 @@ const main = async () => {
         resolvers: [HelloResolver, PostResolver, UserResolver],
         validate: false,
       }),
-      context: ({ req, res }) => ({ em: orm.em, req, res }),
+      context: ({ req, res }) => ({ em: orm.em, req, res, redis }),
     });
     await apolloServer.start();
 

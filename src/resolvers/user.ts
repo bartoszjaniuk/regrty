@@ -1,5 +1,5 @@
-import { COOKIE_NAME } from './../constants';
-import { MyContext } from 'src/types';
+import { COOKIE_NAME, FORGET_PASSWORD_PREFIX } from './../constants';
+import { MyContext } from '../types';
 import { Arg, Ctx, Field, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import argon2 from 'argon2';
 import { EntityManager } from '@mikro-orm/postgresql';
@@ -7,6 +7,8 @@ import { createError } from '../utils/createValidationError';
 import { UserCredentials } from '../models/userCredentials';
 import { validateRegister } from '../utils/validateRegister';
 import { User } from '../entities/User';
+import { sendEmail } from '../utils/sendEmail';
+import { v4 } from 'uuid';
 
 @ObjectType()
 class FieldError {
@@ -25,6 +27,15 @@ class UserResponse {
   user?: User;
 }
 
+@ObjectType() // as responses
+class ForgotPasswordResponse {
+  @Field(() => [FieldError], { nullable: true })
+  errors?: FieldError[];
+
+  @Field(() => Boolean, { nullable: true })
+  isCompleted?: boolean;
+}
+
 @Resolver()
 export class UserResolver {
   @Query(() => User, { nullable: true })
@@ -34,10 +45,62 @@ export class UserResolver {
     return user;
   }
 
-  // @Mutation(() => Boolean)
-  // async forgotPassword(@Arg('email') email: string, @Ctx() { em }: MyContext) {
-  //   // const user = await em.findOne(User, { email });
-  // }
+  @Mutation(() => ForgotPasswordResponse)
+  async forgotPassword(
+    @Arg('email') email: string,
+    @Ctx() { em, redis }: MyContext
+  ): Promise<ForgotPasswordResponse> {
+    if (email.length < 4) {
+      return createError('email', 'email must contain at least 4 characters');
+    }
+
+    if (!email.includes('@') || !email.includes('.')) {
+      return createError('email', 'Invalid email');
+    }
+    const user = await em.findOne(User, { email });
+    if (!user) {
+      return createError('user', 'User not found');
+    }
+
+    const token = v4();
+    const threeDays = 1000 * 60 * 60 * 24 * 3;
+    await redis.set(FORGET_PASSWORD_PREFIX + token, user._id, 'ex', threeDays);
+    await sendEmail(
+      email,
+      `<a href='http://localhost:3000/changePassword/${token}'>Reset password</a>`
+    );
+    return {
+      isCompleted: true,
+    };
+  }
+
+  @Mutation(() => UserResponse)
+  async resetPassword(
+    @Arg('newPassword') newPassword: string,
+    @Arg('token') token: string,
+    @Ctx() { em, redis, req }: MyContext
+  ): Promise<UserResponse> {
+    if (newPassword.length < 4) {
+      return createError('newPassword', 'password must contain at leat 4 characters');
+    }
+    const key = FORGET_PASSWORD_PREFIX + token;
+    const userId = await redis.get(key);
+    if (!userId) return createError('token', 'token expired');
+
+    const user = await em.findOne(User, { _id: parseInt(userId) });
+
+    if (!user) return createError('token', 'user no longer exist');
+
+    user.password = await argon2.hash(newPassword);
+    em.persistAndFlush(user);
+    await redis.del(key);
+
+    req.session.userId = user._id;
+
+    return {
+      user,
+    };
+  }
 
   @Mutation(() => UserResponse)
   async register(
@@ -45,12 +108,6 @@ export class UserResolver {
     @Ctx() { em, req }: MyContext
   ) {
     const hashedPassword = await argon2.hash(userCredentials.password);
-
-    // const user = em.create(User, {
-    //   username: userCredentials.username,
-    //   password: hashedPassword,
-    //   createdAt: new Date(),
-    // });
 
     const areErrors = validateRegister(userCredentials);
 
@@ -121,4 +178,4 @@ export class UserResolver {
   }
 }
 
-// https://www.youtube.com/watch?v=I6ypD7qv3Z8&t=239s 1:31:33
+// https://www.youtube.com/watch?v=I6ypD7qv3Z8&t=16804s 5:12
