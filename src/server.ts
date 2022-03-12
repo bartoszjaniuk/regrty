@@ -1,7 +1,5 @@
 import 'reflect-metadata';
 import { COOKIE_NAME, __prod__ } from './constants';
-import { MikroORM } from '@mikro-orm/core';
-import microConfig from './mikro-orm.config';
 import express from 'express';
 import { ApolloServer } from 'apollo-server-express';
 import { buildSchema } from 'type-graphql';
@@ -12,10 +10,21 @@ import connectRedis from 'connect-redis';
 import cors from 'cors';
 import { UserResolver } from './resolvers/user';
 import Redis from 'ioredis';
+import { createConnection } from 'typeorm';
+import { User } from './entities/User';
+import { Post } from './entities/Post';
 
 const main = async () => {
   try {
-    const orm = await MikroORM.init(microConfig);
+    createConnection({
+      type: 'postgres',
+      database: 'regrty2',
+      username: 'postgres',
+      password: 'pa$$w0rd',
+      logging: true,
+      synchronize: true,
+      entities: [Post, User],
+    });
 
     const app = express();
 
@@ -63,7 +72,7 @@ const main = async () => {
         resolvers: [HelloResolver, PostResolver, UserResolver],
         validate: false,
       }),
-      context: ({ req, res }) => ({ em: orm.em, req, res, redis }),
+      context: ({ req, res }) => ({ req, res, redis }),
     });
     await apolloServer.start();
 
