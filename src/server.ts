@@ -13,10 +13,11 @@ import Redis from 'ioredis';
 import { createConnection } from 'typeorm';
 import { User } from './entities/User';
 import { Post } from './entities/Post';
+import path from 'path';
 
 const main = async () => {
   try {
-    createConnection({
+    const conn = createConnection({
       type: 'postgres',
       database: 'regrty2',
       username: 'postgres',
@@ -24,9 +25,16 @@ const main = async () => {
       logging: true,
       synchronize: true,
       entities: [Post, User],
+      migrations: [path.join(__dirname, './migrations/*')],
     });
 
+    (await conn).runMigrations();
+
+    // await Post.delete({});
+
     const app = express();
+
+    // await Post.delete({});
 
     app.set('trust proxy', true);
     const whitelist = ['http://localhost:3000'];
