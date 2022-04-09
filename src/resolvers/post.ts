@@ -1,5 +1,6 @@
+import { Updoot } from './../entities/Updoot';
+import { MyContext } from './../types';
 import { isAuth } from '../middlewares/isAuth';
-import { MyContext } from 'src/types';
 import {
   Arg,
   Ctx,
@@ -42,6 +43,66 @@ export class PostResolver {
       return root.text.slice(0, 50);
     }
   }
+
+  @Mutation(() => Boolean)
+  // @UseMiddleware(isAuth)
+  async vote(
+    @Arg('postId', () => Int) postId: number,
+    @Arg('value', () => Int) value: number,
+    @Ctx() { req }: MyContext
+  ) {
+    const isUpvote = value !== -1;
+    const realValue = isUpvote ? 1 : -1;
+    const { userId } = req.session;
+
+    const upvote = await Updoot.findOne({ where: { postId, userId: userId ? userId : 5 } });
+
+    if (upvote && upvote.value !== realValue) {
+      // the user has previously voted this post but user is changing the vote (up to down and viceversa)
+      await getConnection().transaction(async transactionalEntityManager => {
+        // if one of the database queries fails, the whole transaction rolls back
+        await transactionalEntityManager
+          .createQueryBuilder()
+          .update(Updoot)
+          .set({ value: realValue })
+          .where('postId = :postId and userId = :userId', { postId, userId: userId ? userId : 5 })
+          .execute();
+
+        await transactionalEntityManager
+          .createQueryBuilder()
+          .update(Post)
+          .set({ points: () => `points + ${2 * realValue}` })
+          .where('_id = :id', { id: postId })
+          .execute();
+      });
+    } else if (!upvote) {
+      // user has never voted this post before
+      await getConnection().transaction(async transactionalEntityManager => {
+        await transactionalEntityManager
+          .createQueryBuilder()
+          .insert()
+          .into(Updoot)
+          .values({ userId: userId ? userId : 5, postId, value: realValue })
+          .execute();
+
+        await transactionalEntityManager
+          .createQueryBuilder()
+          .update(Post)
+          .set({ points: () => `points + ${realValue}` })
+          .where('_id = :id', { id: postId })
+          .execute();
+      });
+    }
+
+    /* await Upvote.insert({
+      userId,
+      postId,
+      value: realValue,
+    }); */
+
+    return true;
+  }
+
   @Query(() => PaginatedPosts)
   async posts(
     @Arg('limit', () => Int) limit: number,
@@ -50,19 +111,31 @@ export class PostResolver {
     // 20 -> 21
     const realLimit = Math.min(50, limit);
     const reaLimitPlusOne = realLimit + 1;
-    const qb = getConnection()
-      .getRepository(Post)
-      .createQueryBuilder('p')
-      .orderBy('"createdAt"', 'DESC')
-      .take(reaLimitPlusOne);
+
+    const replacements: any[] = [reaLimitPlusOne];
 
     if (cursor) {
-      qb.where('"createdAt" < :cursor', {
-        cursor: new Date(parseInt(cursor)),
-      });
+      replacements.push(new Date(parseInt(cursor)));
     }
 
-    const posts = await qb.getMany();
+    const posts = await getConnection().query(
+      `
+    select p.*,
+    json_build_object(
+      '_id', u._id,
+      'username', u.username,
+      'email', u.email,
+      'createdAt', u."createdAt",
+      'updatedAt', u."updatedAt"
+      ) creator
+    from post p
+    inner join public.user u on u._id = p."creatorId"
+    ${cursor ? `where p."createdAt" < $2` : ''}
+    order by p."createdAt" DESC
+    limit $1
+    `,
+      replacements
+    );
 
     return {
       posts: posts.slice(0, realLimit),

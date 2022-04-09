@@ -1,3 +1,4 @@
+import { Updoot } from './entities/Updoot';
 import 'reflect-metadata';
 import { COOKIE_NAME, __prod__ } from './constants';
 import express from 'express';
@@ -24,7 +25,7 @@ const main = async () => {
       password: 'pa$$w0rd',
       logging: true,
       synchronize: true,
-      entities: [Post, User],
+      entities: [Post, User, Updoot],
       migrations: [path.join(__dirname, './migrations/*')],
     });
 
